@@ -3,8 +3,11 @@ import cookieParser from "cookie-parser";
 import bodyParser from "body-parser";
 import crypto from "crypto";
 import path from "path";
+import axios from "axios";
+import dotenv from "dotenv";
 
-// ---------- Types ----------
+dotenv.config();
+
 interface MenuItem {
 	id: number;
 	name: string;
@@ -14,32 +17,29 @@ interface MenuItem {
 interface SessionData {
 	orders: MenuItem[][];
 	currentOrder: MenuItem[];
+	lastPayment?: { amount: number; reference: string };
 }
 
-// ---------- App Setup ----------
 const app = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(cookieParser());
 app.use(bodyParser.json());
 
-// Set EJS as template engine
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
 
-// ---------- Dummy Data ----------
 const SESSIONS: Record<string, SessionData> = {};
 
-const MENU: MenuItem[] = [
-	{ id: 1, name: "Margherita Pizza", price: 3500 },
-	{ id: 2, name: "Cheeseburger", price: 1800 },
-	{ id: 3, name: "Jollof Rice (Large)", price: 2200 },
-	{ id: 4, name: "Fried Plantain + Egg", price: 700 },
-	{ id: 5, name: "Coke (330ml)", price: 300 },
+export const MENU: MenuItem[] = [
+	{ id: 10, name: "Margherita Pizza", price: 3500 },
+	{ id: 20, name: "Cheeseburger", price: 1800 },
+	{ id: 30, name: "Jollof Rice (Large)", price: 2200 },
+	{ id: 40, name: "Fried Plantain + Egg", price: 700 },
+	{ id: 50, name: "Coke (330ml)", price: 300 },
 ];
 
-// ---------- Helpers ----------
-function getSession(req: Request, res: Response): SessionData {
+export function getSession(req: Request, res: Response): SessionData {
 	let sid = req.cookies?.sessionId as string | undefined;
 
 	if (!sid || !SESSIONS[sid]) {
@@ -53,7 +53,7 @@ function getSession(req: Request, res: Response): SessionData {
 
 function mainMenu(): string[] {
 	return [
-		"Welcome to Dummy Restaurant Bot 🍽️",
+		"Welcome to Dummy Restaurant Bot",
 		"Select 1 to Place an order",
 		"Select 99 to Checkout order",
 		"Select 98 to See order history",
@@ -62,20 +62,16 @@ function mainMenu(): string[] {
 	];
 }
 
-// ---------- Routes ----------
-
-// Frontend page
 app.get("/", (req: Request, res: Response) => {
 	res.render("index");
 });
 
 // Chat API
-app.post("/chat", (req: Request, res: Response) => {
+app.post("/chat", async (req: Request, res: Response) => {
 	const { input } = req.body as { input?: string };
 	const session = getSession(req, res);
 	const msg = String(input || "").trim();
 
-	// No input → show main menu
 	if (!msg) {
 		return res.json({ reply: mainMenu() });
 	}
@@ -94,11 +90,46 @@ app.post("/chat", (req: Request, res: Response) => {
 					reply: ["No order to place. Type 1 to start an order."],
 				});
 			}
-			session.orders.push([...session.currentOrder]);
-			session.currentOrder = [];
-			return res.json({
-				reply: ["✅ Order placed successfully!", ...mainMenu()],
-			});
+
+			const total = session.currentOrder.reduce(
+				(sum, it) => sum + it.price,
+				0
+			);
+
+			// Create Paystack transaction
+			try {
+				const reference = crypto.randomBytes(8).toString("hex");
+
+				const paystackRes = await axios.post(
+					"https://api.paystack.co/transaction/initialize",
+					{
+						email: "test@example.com", // you can collect user email optionally
+						amount: total * 100, // Paystack expects kobo
+						reference,
+						callback_url: `${process.env.BASE_URL}/paystack/callback?ref=${reference}`,
+					},
+					{
+						headers: {
+							Authorization: `Bearer ${process.env.PAYSTACK_SECRET}`,
+							"Content-Type": "application/json",
+						},
+					}
+				);
+
+				session.lastPayment = { amount: total, reference };
+
+				return res.json({
+					reply: [
+						`Your total is ₦${total}. Click below to complete payment:`,
+						paystackRes.data.data.authorization_url,
+					],
+				});
+			} catch (err) {
+				console.error(err);
+				return res.json({
+					reply: ["Error initializing payment. Please try again."],
+				});
+			}
 		}
 
 		case "98": {
@@ -128,7 +159,7 @@ app.post("/chat", (req: Request, res: Response) => {
 		case "0": {
 			session.currentOrder = [];
 			return res.json({
-				reply: ["❌ Current order cancelled.", ...mainMenu()],
+				reply: ["Current order cancelled.", ...mainMenu()],
 			});
 		}
 
@@ -150,7 +181,44 @@ app.post("/chat", (req: Request, res: Response) => {
 	}
 });
 
-// ---------- Start ----------
+// Paystack callback
+app.get("/paystack/callback", async (req: Request, res: Response) => {
+	const { reference } = req.query;
+	if (!reference) return res.send("Invalid callback");
+
+	try {
+		const verifyRes = await axios.get(
+			`https://api.paystack.co/transaction/verify/${reference}`,
+			{
+				headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET}` },
+			}
+		);
+
+		if (verifyRes.data.data.status === "success") {
+			// Find session with reference
+			const sessionId = Object.keys(SESSIONS).find((sid) => {
+				return SESSIONS[sid].lastPayment?.reference === reference;
+			});
+
+			if (sessionId) {
+				const session = SESSIONS[sessionId];
+				session.orders.push([...session.currentOrder]);
+				session.currentOrder = [];
+				session.lastPayment = undefined;
+			}
+
+			return res.send(
+				`<script>alert("Payment successful! 🎉 Returning to bot..."); window.location.href="/";</script>`
+			);
+		} else {
+			return res.send("Payment failed.");
+		}
+	} catch (err) {
+		console.error(err);
+		return res.send("Error verifying payment.");
+	}
+});
+
 app.listen(PORT, () => {
-	console.log(`Restaurant ChatBot running at http://localhost:${PORT}`);
+	console.log(`Jolomi's Restaurant running at http://localhost:${PORT}`);
 });

@@ -1,64 +1,169 @@
 <!DOCTYPE html>
 <html>
+
 <head>
-  <title>Restaurant ChatBot</title>
-  <style>
-    body { font-family: Arial, sans-serif; background:#f4f4f4; display:flex; justify-content:center; }
-    .chat-container { width:400px; background:white; margin-top:50px; border-radius:8px; box-shadow:0 0 10px rgba(0,0,0,0.1); display:flex; flex-direction:column; }
-    .chat-box { flex:1; padding:15px; overflow-y:auto; height:400px; }
-    .message { margin:5px 0; padding:8px 12px; border-radius:6px; max-width:80%; }
-    .bot { background:#eee; align-self:flex-start; }
-    .user { background:#007bff; color:white; align-self:flex-end; }
-    form { display:flex; border-top:1px solid #ddd; }
-    input { flex:1; padding:10px; border:none; }
-    button { padding:10px 15px; border:none; background:#007bff; color:white; cursor:pointer; }
-  </style>
+	<title>Restaurant ChatBot</title>
+	<style>
+		body {
+			font-family: Arial, sans-serif;
+			background: #f4f4f4;
+			display: flex;
+			justify-content: center;
+		}
+
+		.chat-container {
+			width: 400px;
+			background: white;
+			margin-top: 50px;
+			border-radius: 8px;
+			box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+			display: flex;
+			flex-direction: column;
+		}
+
+		.chat-box {
+			flex: 1;
+			padding: 15px;
+			overflow-y: auto;
+			height: 400px;
+		}
+
+		.message {
+			margin: 5px 0;
+			padding: 8px 12px;
+			border-radius: 6px;
+			max-width: 80%;
+			word-wrap: break-word;
+		}
+
+		.bot {
+			background: #eee;
+			align-self: flex-start;
+		}
+
+		.user {
+			background: #007bff;
+			color: white;
+			align-self: flex-end;
+		}
+
+		.pay-container {
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+		}
+
+		.pay-link {
+			display: inline-block;
+			padding: 8px 12px;
+			background: #28a745;
+			color: white;
+			border-radius: 5px;
+			text-decoration: none;
+			text-align: center;
+		}
+
+		form {
+			display: flex;
+			border-top: 1px solid #ddd;
+		}
+
+		input {
+			flex: 1;
+			padding: 10px;
+			border: none;
+		}
+
+		button {
+			padding: 10px 15px;
+			border: none;
+			background: #007bff;
+			color: white;
+			cursor: pointer;
+		}
+	</style>
 </head>
+
 <body>
-  <div class="chat-container">
-    <div class="chat-box" id="chat"></div>
-    <form id="chatForm">
-      <input type="text" id="msg" placeholder="Type option..." autocomplete="off" />
-      <button type="submit">Send</button>
-    </form>
-  </div>
+	<div class="chat-container">
+		<div class="chat-box" id="chat"></div>
+		<form id="chatForm">
+			<input type="text" id="msg" placeholder="Type option..." autocomplete="off" />
+			<button type="submit">Send</button>
+		</form>
+	</div>
 
-  <script>
-    const chatBox = document.getElementById("chat");
-    const form = document.getElementById("chatForm");
-    const input = document.getElementById("msg");
+	<script>
+		const chatBox = document.getElementById("chat");
+		const form = document.getElementById("chatForm");
+		const input = document.getElementById("msg");
 
-    function addMessage(text, sender="bot") {
-      const div = document.createElement("div");
-      div.className = "message " + sender;
-      div.innerText = text;
-      chatBox.appendChild(div);
-      chatBox.scrollTop = chatBox.scrollHeight;
-    }
+			function addMessage(text, sender = "bot") {
+				const div = document.createElement("div");
+				div.className = "message " + sender;
 
-    async function sendMessage(message) {
-      addMessage(message, "user");
-      const res = await fetch("/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input: message })
-      });
-      const data = await res.json();
-      data.reply.forEach(r => addMessage(r, "bot"));
-    }
+			// Detect Paystack checkout messages
+			if (sender === "bot" && text.startsWith("http") && text.includes("paystack.com")) {
+				// Previous bot message should contain the total amount
+				const lastBot = chatBox.querySelector(".message.bot:last-child");
+				if (lastBot && lastBot.innerText.includes("₦")) {
+					// Convert last message into a container
+					const payContainer = document.createElement("div");
+					payContainer.className = "pay-container";
 
-    form.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const val = input.value.trim();
-      if (!val) return;
-      sendMessage(val);
-      input.value = "";
-    });
+					// Preserve total text
+					const totalText = document.createElement("div");
+					totalText.innerText = lastBot.innerText;
+					payContainer.appendChild(totalText);
 
-    // load main menu on start
-    fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input: "" }) })
-      .then(res => res.json())
-      .then(data => data.reply.forEach(r => addMessage(r, "bot")));
-  </script>
+					// Add Paystack button
+					const link = document.createElement("a");
+					link.href = text;
+					link.target = "_blank";
+					link.innerText = "Pay with Paystack";
+					link.className = "pay-link";
+					payContainer.appendChild(link);
+
+					// Replace last bot message with total + button
+					lastBot.innerHTML = "";
+					lastBot.appendChild(payContainer);
+					return;
+				}
+			}
+
+			div.innerText = text;
+			chatBox.appendChild(div);
+			chatBox.scrollTop = chatBox.scrollHeight;
+		}
+
+			async function sendMessage(message) {
+				addMessage(message, "user");
+				const res = await fetch("/chat", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ input: message })
+				});
+				const data = await res.json();
+				data.reply.forEach(r => addMessage(r, "bot"));
+			}
+
+			form.addEventListener("submit", (e) => {
+				e.preventDefault();
+				const val = input.value.trim();
+				if (!val) return;
+				sendMessage(val);
+				input.value = "";
+			});
+
+			// load main menu on start
+			fetch("/chat", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ input: "" })
+			})
+				.then(res => res.json())
+				.then(data => data.reply.forEach(r => addMessage(r, "bot")));
+		</script>
 </body>
+
 </html>
